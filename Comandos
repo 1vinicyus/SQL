@@ -1,0 +1,222 @@
+Comandos para Banco de Dados.
+
+1. SELECT
+Seleciona dados de uma tabela:
+SELECT * FROM Clientes;
+
+Selecionando apenas algumas colunas:
+SELECT Nome, Cidade
+FROM Clientes;
+
+2. WHERE
+Filtra registros:
+SELECT *
+FROM Clientes
+WHERE Estado = 'PR';
+
+Outro exemplo:
+SELECT *
+FROM Produtos
+WHERE Preco > 500;
+
+3. ORDER BY
+Ordena os resultados:
+Crescente:
+SELECT *
+FROM Produtos
+ORDER BY Preco;
+
+Decrescente:
+SELECT *
+FROM Produtos
+ORDER BY Preco DESC;
+
+4. DISTINCT
+Remove valores repetidos:
+SELECT DISTINCT Estado
+FROM Clientes;
+
+5. LIKE
+Pesquisa por padrões:
+Começa com "A":
+SELECT *
+FROM Clientes
+WHERE Nome LIKE 'A%';
+
+Termina com "a":
+SELECT *
+FROM Clientes
+WHERE Nome LIKE '%a';
+
+Contém "Sil":
+SELECT *
+FROM Clientes
+WHERE Nome LIKE '%Sil%';
+
+6. BETWEEN
+Intervalos:
+
+SELECT *
+FROM Produtos
+WHERE Preco BETWEEN 100 AND 1000;
+
+7. IN
+Vários valores:
+SELECT *
+FROM Clientes
+WHERE Estado IN ('PR','SP');
+
+8. AND / OR / NOT
+SELECT *
+FROM Clientes
+WHERE Estado='PR'
+AND Idade > 30;
+SELECT *
+FROM Clientes
+WHERE Estado='PR'
+OR Estado='SC';
+
+9. COUNT
+
+Conta registros.
+
+SELECT COUNT(*)
+FROM Clientes;
+10. SUM
+
+Soma valores.
+
+SELECT SUM(Estoque)
+FROM Produtos;
+11. AVG
+
+Média.
+
+SELECT AVG(Preco)
+FROM Produtos;
+12. MAX
+
+Maior valor.
+
+SELECT MAX(Preco)
+FROM Produtos;
+13. MIN
+
+Menor valor.
+
+SELECT MIN(Preco)
+FROM Produtos;
+14. GROUP BY
+
+Agrupa informações.
+
+SELECT Estado,
+COUNT(*)
+FROM Clientes
+GROUP BY Estado;
+15. HAVING
+
+Filtra grupos.
+
+SELECT Estado,
+COUNT(*)
+FROM Clientes
+GROUP BY Estado
+HAVING COUNT(*) > 2;
+16. INNER JOIN
+
+Une tabelas relacionadas.
+
+SELECT
+Clientes.Nome,
+Pedidos.Data_Pedido
+FROM Clientes
+INNER JOIN Pedidos
+ON Clientes.ID_Cliente = Pedidos.ID_Cliente;
+17. LEFT JOIN
+
+Mostra todos da tabela da esquerda.
+
+SELECT
+Clientes.Nome,
+Pedidos.Data_Pedido
+FROM Clientes
+LEFT JOIN Pedidos
+ON Clientes.ID_Cliente = Pedidos.ID_Cliente;
+18. RIGHT JOIN
+
+No Access, esse comando existe, mas normalmente o LEFT JOIN é suficiente (basta inverter a ordem das tabelas).
+
+19. INSERT
+
+Insere registros.
+
+INSERT INTO Clientes
+(Nome, Cidade, Estado, Idade)
+VALUES
+('José Silva','Londrina','PR',29);
+20. UPDATE
+
+Atualiza dados.
+
+UPDATE Produtos
+SET Preco = 99
+WHERE ID_Produto = 2;
+21. DELETE
+
+Remove registros.
+
+DELETE
+FROM Clientes
+WHERE ID_Cliente = 10;
+22. CREATE TABLE
+
+Cria uma tabela.
+
+CREATE TABLE Funcionarios
+(
+ID INT,
+Nome TEXT(100),
+Salario CURRENCY
+);
+23. ALTER TABLE
+
+Adiciona coluna.
+
+ALTER TABLE Clientes
+ADD Email TEXT(100);
+24. DROP TABLE
+
+Exclui a tabela.
+
+DROP TABLE Funcionarios;
+25. Alias (AS)
+
+Renomeia colunas temporariamente.
+
+SELECT
+Nome AS Cliente,
+Cidade AS Municipio
+FROM Clientes;
+26. Operações matemáticas
+SELECT
+Produto,
+Preco * Estoque AS Valor_Estoque
+FROM Produtos;
+27. Subconsulta
+SELECT *
+FROM Produtos
+WHERE Preco >
+(
+SELECT AVG(Preco)
+FROM Produtos
+);
+28. TOP (Access)
+
+O Access usa TOP em vez de LIMIT.
+
+Os cinco produtos mais caros:
+
+SELECT TOP 5 *
+FROM Produtos
+ORDER BY Preco DESC;
