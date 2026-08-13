@@ -1,0 +1,53 @@
+CREATE DATABASE IF NOT EXISTS eupresa;
+USE eupresa;
+ 
+CREATE TABLE IF NOT EXISTS cliente (
+    cnpj          VARCHAR(20) PRIMARY KEY,
+    nome_cliente  VARCHAR(100) NOT NULL,
+    num_contrato  INT UNIQUE NOT NULL
+);
+ 
+CREATE TABLE IF NOT EXISTS setor (
+    id_setor         INT AUTO_INCREMENT PRIMARY KEY,
+    nome_coordenador VARCHAR(100) NOT NULL,
+    nome_setor       VARCHAR(50) NOT NULL
+);
+ 
+CREATE TABLE IF NOT EXISTS colaborador (
+    cpf_colaborador  VARCHAR(11) PRIMARY KEY,
+    email            VARCHAR(100) UNIQUE NOT NULL,
+    nome_colaborador VARCHAR(100) NOT NULL,
+    ativo            CHAR(1) NOT NULL DEFAULT 'S' CHECK (ativo IN ('S', 'N')),
+    id_setor         INT,
+    FOREIGN KEY (id_setor) REFERENCES setor(id_setor)
+);
+ 
+CREATE TABLE IF NOT EXISTS tarefa (
+    id_tarefa        INT AUTO_INCREMENT PRIMARY KEY,
+    tipo_tarefa      VARCHAR(220) NOT NULL,
+    descricao_tarefa VARCHAR(220) NOT NULL,
+    cnpj             VARCHAR(20) NOT NULL,
+    cpf_colaborador  VARCHAR(11),
+    FOREIGN KEY (cnpj) REFERENCES cliente(cnpj),
+    FOREIGN KEY (cpf_colaborador) REFERENCES colaborador(cpf_colaborador)
+);
+ 
+CREATE TABLE IF NOT EXISTS registroHora (
+    id_registro      INT AUTO_INCREMENT PRIMARY KEY,
+    hora_trabalhada  TIME NOT NULL,
+    data_registro    DATE NOT NULL,
+    cpf_colaborador  VARCHAR(11) NOT NULL,
+    id_tarefa        INT,
+    FOREIGN KEY (cpf_colaborador) REFERENCES colaborador(cpf_colaborador),
+    FOREIGN KEY (id_tarefa) REFERENCES tarefa(id_tarefa)
+);
+ 
+CREATE TABLE IF NOT EXISTS planejamento (
+    id_planejamento  INT AUTO_INCREMENT PRIMARY KEY,
+    hora_planejada   TIME NOT NULL,
+    data_planejada   DATE NOT NULL,
+    cpf_colaborador  VARCHAR(11) NOT NULL,
+    id_tarefa        INT,
+    FOREIGN KEY (cpf_colaborador) REFERENCES colaborador(cpf_colaborador),
+    FOREIGN KEY (id_tarefa) REFERENCES tarefa(id_tarefa)
+);
