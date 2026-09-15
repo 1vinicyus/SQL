@@ -5,19 +5,18 @@
 4- Impedir lançamento de hora em mês fechado
 5- Revalidar limite diário e mês fechado em correções (UPDATE)
 
-VIEWS (consulta):
-1- vw_planejado_realizado ....... Planejado x Realizado, por tarefa
-2- vw_registro_hora ............. Base detalhada para relatório de horas
-3- vw_comparativo_horas ......... Planejado | Trabalhado | Diferença
+VIEWS (cada uma atende uma procedure):
+1- vw_horas_cliente_mes ......... consumida por sp_fechar_mes_cliente
+2- vw_meses_fechados ............ consumida por sp_reabrir_mes_cliente
+3- vw_registro_hora_detalhe ..... consumida por sp_corrigir_hora
 
 PROCEDURES (toda procedure provoca mudança no banco):
 1- sp_fechar_mes_cliente ........ INSERT em fechamento_mensal + historico_fechamento
 2- sp_reabrir_mes_cliente ....... INSERT em historico_fechamento + DELETE em fechamento_mensal
 3- sp_corrigir_hora ............. UPDATE em registroHora + INSERT em historico_correcao_hora
 
-REQUISITO: MySQL 5.7.7 ou superior
-(5.7.2+ para vários triggers BEFORE INSERT na mesma tabela;
- 5.7.7+ para views com subquery na cláusula FROM)
+REQUISITO: MySQL 5.7.2+ / MariaDB 10.2.4+
+(vários triggers BEFORE INSERT na mesma tabela)
 */
 
 CREATE DATABASE IF NOT EXISTS eupresa;
@@ -123,6 +122,91 @@ CREATE TABLE IF NOT EXISTS historico_correcao_hora (
 
 
 -- ============================================
+-- VIEW 1: HORAS POR CLIENTE E MÊS
+-- Consumida por sp_fechar_mes_cliente.
+-- Isola a travessia registroHora -> tarefa -> cliente e a
+-- consolidacao mensal, que a procedure apenas le.
+-- ============================================
+CREATE OR REPLACE VIEW vw_horas_cliente_mes AS
+SELECT
+    t.cnpj,
+    cl.nome_cliente,
+    YEAR(r.data_registro)  AS ano,
+    MONTH(r.data_registro) AS mes,
+    COUNT(r.id_registro)   AS qtd_registros,
+    SUM(TIME_TO_SEC(r.hora_trabalhada)) AS total_segundos
+FROM registroHora r
+INNER JOIN tarefa  t  ON t.id_tarefa = r.id_tarefa
+INNER JOIN cliente cl ON cl.cnpj = t.cnpj
+GROUP BY t.cnpj, cl.nome_cliente, YEAR(r.data_registro), MONTH(r.data_registro);
+
+/* Consulta avulsa:
+SELECT cnpj, nome_cliente, ano, mes, qtd_registros,
+       SEC_TO_TIME(total_segundos) AS total_horas
+  FROM vw_horas_cliente_mes
+ WHERE ano = 2026
+ ORDER BY nome_cliente, mes;
+*/
+
+
+-- ============================================
+-- VIEW 2: MESES FECHADOS
+-- Consumida por sp_reabrir_mes_cliente.
+-- Mostra os periodos encerrados ja com o nome do cliente.
+-- ============================================
+CREATE OR REPLACE VIEW vw_meses_fechados AS
+SELECT
+    f.id_fechamento,
+    f.cnpj,
+    cl.nome_cliente,
+    f.ano,
+    f.mes,
+    f.total_horas,
+    f.data_fechamento,
+    f.responsavel_fechamento
+FROM fechamento_mensal f
+INNER JOIN cliente cl ON cl.cnpj = f.cnpj;
+
+/* Consulta avulsa:
+SELECT * FROM vw_meses_fechados ORDER BY ano DESC, mes DESC;
+*/
+
+
+-- ============================================
+-- VIEW 3: REGISTRO DE HORA DETALHADO
+-- Consumida por sp_corrigir_hora.
+-- Junta o lancamento ao colaborador, a tarefa e ao cliente,
+-- e indica se o mes daquele registro esta aberto ou fechado.
+-- ============================================
+CREATE OR REPLACE VIEW vw_registro_hora_detalhe AS
+SELECT
+    r.id_registro,
+    r.data_registro,
+    r.hora_trabalhada,
+    r.cpf_colaborador,
+    c.nome_colaborador,
+    r.id_tarefa,
+    t.tipo_tarefa,
+    t.cnpj,
+    cl.nome_cliente,
+    CASE WHEN f.id_fechamento IS NULL THEN 'ABERTO' ELSE 'FECHADO' END AS situacao_mes
+FROM registroHora r
+INNER JOIN colaborador c ON c.cpf_colaborador = r.cpf_colaborador
+LEFT JOIN tarefa  t  ON t.id_tarefa = r.id_tarefa
+LEFT JOIN cliente cl ON cl.cnpj = t.cnpj
+LEFT JOIN fechamento_mensal f
+       ON f.cnpj = t.cnpj
+      AND f.ano  = YEAR(r.data_registro)
+      AND f.mes  = MONTH(r.data_registro);
+
+/* Consulta avulsa:
+SELECT * FROM vw_registro_hora_detalhe
+ WHERE situacao_mes = 'FECHADO'
+ ORDER BY data_registro;
+*/
+
+
+-- ============================================
 -- TRIGGER 1: IMPEDIR HORA DE COLABORADOR INATIVO
 -- ============================================
 DELIMITER $$
@@ -215,8 +299,11 @@ DELIMITER ;
 
 -- ============================================
 -- TRIGGER 5: REVALIDAR REGRAS NO UPDATE
--- Sem ela, qualquer UPDATE em registroHora (inclusive o
--- da sp_corrigir_hora) passa por fora das triggers 2 e 4.
+-- Sem ela, qualquer UPDATE em registroHora passa por fora
+-- das triggers 2 e 4.
+-- Le as tabelas direto, e nao a vw_registro_hora_detalhe:
+-- a view se apoia em registroHora, que e a propria tabela
+-- da trigger.
 -- ============================================
 DELIMITER $$
 DROP TRIGGER IF EXISTS trg_validar_correcao_hora $$
@@ -259,144 +346,9 @@ DELIMITER ;
 
 
 -- ============================================
--- LIMPEZA: as procedures de consulta viraram views
--- ============================================
-DROP PROCEDURE IF EXISTS sp_planejado_realizado;
-DROP PROCEDURE IF EXISTS sp_relatorio_horas;
-DROP PROCEDURE IF EXISTS sp_comparativo_horas;
-
-
--- ============================================
--- VIEW 1: PLANEJADO X REALIZADO
--- Grao: colaborador + data + tarefa.
--- O filtro de periodo fica a cargo de quem consulta.
--- ============================================
-CREATE OR REPLACE VIEW vw_planejado_realizado AS
-SELECT
-    c.cpf_colaborador,
-    c.nome_colaborador,
-    dados.data_referencia,
-    dados.id_tarefa,
-    t.tipo_tarefa,
-    SEC_TO_TIME(COALESCE(p.planejado_segundos, 0))  AS horas_planejadas,
-    SEC_TO_TIME(COALESCE(r.realizado_segundos, 0))  AS horas_trabalhadas
-FROM (
-    SELECT cpf_colaborador, data_planejada AS data_referencia, id_tarefa
-    FROM planejamento
-    UNION
-    SELECT cpf_colaborador, data_registro AS data_referencia, id_tarefa
-    FROM registroHora
-) AS dados
-INNER JOIN colaborador c ON c.cpf_colaborador = dados.cpf_colaborador
-LEFT JOIN tarefa t ON t.id_tarefa = dados.id_tarefa
-LEFT JOIN (
-    SELECT cpf_colaborador, data_planejada, id_tarefa, SUM(TIME_TO_SEC(hora_planejada)) AS planejado_segundos
-    FROM planejamento
-    GROUP BY cpf_colaborador, data_planejada, id_tarefa
-) AS p ON p.cpf_colaborador = dados.cpf_colaborador
-      AND p.data_planejada  = dados.data_referencia
-      AND p.id_tarefa      <=> dados.id_tarefa
-LEFT JOIN (
-    SELECT cpf_colaborador, data_registro, id_tarefa, SUM(TIME_TO_SEC(hora_trabalhada)) AS realizado_segundos
-    FROM registroHora
-    GROUP BY cpf_colaborador, data_registro, id_tarefa
-) AS r ON r.cpf_colaborador = dados.cpf_colaborador
-      AND r.data_registro   = dados.data_referencia
-      AND r.id_tarefa      <=> dados.id_tarefa;
-
-/* Uso:
-SELECT * FROM vw_planejado_realizado
- WHERE data_referencia BETWEEN '2026-07-01' AND '2026-07-31'
- ORDER BY data_referencia, nome_colaborador;
-*/
-
-
--- ============================================
--- VIEW 2: BASE DETALHADA DE HORAS TRABALHADAS
--- Grao: um registro de hora.
--- O COUNT(DISTINCT id_tarefa) do relatorio original nao pode
--- ser recomposto a partir de totais ja agregados, entao a view
--- entrega o detalhe e a agregacao fica na consulta.
--- ============================================
-CREATE OR REPLACE VIEW vw_registro_hora AS
-SELECT
-    r.id_registro,
-    r.data_registro,
-    r.hora_trabalhada,
-    r.id_tarefa,
-    t.tipo_tarefa,
-    t.cnpj,
-    cl.nome_cliente,
-    c.cpf_colaborador,
-    c.nome_colaborador,
-    c.ativo
-FROM registroHora r
-INNER JOIN colaborador c ON c.cpf_colaborador = r.cpf_colaborador
-LEFT JOIN tarefa  t  ON t.id_tarefa = r.id_tarefa
-LEFT JOIN cliente cl ON cl.cnpj = t.cnpj;
-
-/* Uso (reproduz o relatorio de horas original):
-SELECT cpf_colaborador,
-       nome_colaborador,
-       COUNT(DISTINCT id_tarefa) AS quantidade_tarefas,
-       COUNT(id_registro)        AS quantidade_registros,
-       SEC_TO_TIME(SUM(TIME_TO_SEC(hora_trabalhada))) AS total_horas_trabalhadas
-  FROM vw_registro_hora
- WHERE data_registro BETWEEN '2026-07-01' AND '2026-07-31'
- GROUP BY cpf_colaborador, nome_colaborador
- ORDER BY total_horas_trabalhadas DESC;
-*/
-
-
--- ============================================
--- VIEW 3: PLANEJADO X TRABALHADO X DIFERENÇA
--- Grao: colaborador + data.
--- ============================================
-CREATE OR REPLACE VIEW vw_comparativo_horas AS
-SELECT
-    c.cpf_colaborador,
-    c.nome_colaborador,
-    dados.data_referencia,
-    SEC_TO_TIME(COALESCE(p.total_planejado, 0))  AS horas_planejadas,
-    SEC_TO_TIME(COALESCE(r.total_trabalhado, 0)) AS horas_trabalhadas,
-    CASE
-        WHEN COALESCE(r.total_trabalhado, 0) - COALESCE(p.total_planejado, 0) >= 0
-        THEN CONCAT('+', SEC_TO_TIME(COALESCE(r.total_trabalhado, 0) - COALESCE(p.total_planejado, 0)))
-        ELSE SEC_TO_TIME(COALESCE(r.total_trabalhado, 0) - COALESCE(p.total_planejado, 0))
-    END AS diferenca
-FROM (
-    SELECT cpf_colaborador, data_planejada AS data_referencia
-    FROM planejamento
-    GROUP BY cpf_colaborador, data_planejada
-    UNION
-    SELECT cpf_colaborador, data_registro AS data_referencia
-    FROM registroHora
-    GROUP BY cpf_colaborador, data_registro
-) AS dados
-INNER JOIN colaborador c ON c.cpf_colaborador = dados.cpf_colaborador
-LEFT JOIN (
-    SELECT cpf_colaborador, data_planejada, SUM(TIME_TO_SEC(hora_planejada)) AS total_planejado
-    FROM planejamento
-    GROUP BY cpf_colaborador, data_planejada
-) AS p ON p.cpf_colaborador = dados.cpf_colaborador
-      AND p.data_planejada  = dados.data_referencia
-LEFT JOIN (
-    SELECT cpf_colaborador, data_registro, SUM(TIME_TO_SEC(hora_trabalhada)) AS total_trabalhado
-    FROM registroHora
-    GROUP BY cpf_colaborador, data_registro
-) AS r ON r.cpf_colaborador = dados.cpf_colaborador
-      AND r.data_registro   = dados.data_referencia;
-
-/* Uso:
-SELECT * FROM vw_comparativo_horas
- WHERE data_referencia BETWEEN '2026-07-01' AND '2026-07-31'
- ORDER BY data_referencia, nome_colaborador;
-*/
-
-
--- ============================================
 -- PROCEDURE 1: FECHAR O MÊS DE UM CLIENTE
--- Grava em: fechamento_mensal, historico_fechamento
+-- Le: vw_meses_fechados, vw_horas_cliente_mes
+-- Grava: fechamento_mensal, historico_fechamento
 -- ============================================
 DELIMITER $$
 DROP PROCEDURE IF EXISTS sp_fechar_mes_cliente $$
@@ -424,22 +376,19 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'ERRO: e obrigatorio informar o responsavel pelo fechamento.';
     END IF;
 
-    -- recusa fechar duas vezes o mesmo mes
+    -- recusa fechar duas vezes o mesmo mes  (VIEW 2)
     SELECT COUNT(*) INTO v_ja_fechado
-    FROM fechamento_mensal
+    FROM vw_meses_fechados
     WHERE cnpj = p_cnpj AND ano = p_ano AND mes = p_mes;
 
     IF v_ja_fechado > 0 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'ERRO: este mes ja foi fechado para este cliente.';
     END IF;
 
-    -- soma tudo que foi trabalhado naquele mes para aquele cliente
-    SELECT COALESCE(SUM(TIME_TO_SEC(r.hora_trabalhada)), 0) INTO v_total_segundos
-    FROM registroHora r
-    INNER JOIN tarefa t ON t.id_tarefa = r.id_tarefa
-    WHERE t.cnpj = p_cnpj
-      AND YEAR(r.data_registro) = p_ano
-      AND MONTH(r.data_registro) = p_mes;
+    -- total trabalhado no periodo, ja consolidado pela view  (VIEW 1)
+    SELECT COALESCE(MAX(total_segundos), 0) INTO v_total_segundos
+    FROM vw_horas_cliente_mes
+    WHERE cnpj = p_cnpj AND ano = p_ano AND mes = p_mes;
 
     -- recusa fechar um mes vazio
     IF v_total_segundos = 0 THEN
@@ -464,7 +413,8 @@ DELIMITER ;
 
 -- ============================================
 -- PROCEDURE 2: REABRIR UM MÊS FECHADO
--- Grava em: historico_fechamento; apaga de fechamento_mensal
+-- Le: vw_meses_fechados
+-- Grava: historico_fechamento; apaga de fechamento_mensal
 -- ============================================
 DELIMITER $$
 DROP PROCEDURE IF EXISTS sp_reabrir_mes_cliente $$
@@ -494,8 +444,9 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'ERRO: e obrigatorio informar o responsavel pela reabertura.';
     END IF;
 
+    -- situacao atual do periodo  (VIEW 2)
     SELECT COUNT(*), MAX(total_horas) INTO v_existe, v_total_horas
-    FROM fechamento_mensal
+    FROM vw_meses_fechados
     WHERE cnpj = p_cnpj AND ano = p_ano AND mes = p_mes;
 
     IF v_existe = 0 THEN
@@ -520,9 +471,8 @@ DELIMITER ;
 
 -- ============================================
 -- PROCEDURE 3: CORRIGIR UMA HORA JÁ LANÇADA
--- Grava em: registroHora (UPDATE), historico_correcao_hora
--- O limite de 10:48 e o bloqueio de mes fechado sao
--- garantidos pela Trigger 5.
+-- Le: vw_registro_hora_detalhe
+-- Grava: registroHora (UPDATE), historico_correcao_hora
 -- ============================================
 DELIMITER $$
 DROP PROCEDURE IF EXISTS sp_corrigir_hora $$
@@ -537,6 +487,7 @@ BEGIN
     DECLARE v_hora_atual TIME;
     DECLARE v_cpf VARCHAR(11);
     DECLARE v_data DATE;
+    DECLARE v_situacao VARCHAR(10);
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
@@ -544,8 +495,10 @@ BEGIN
         RESIGNAL;
     END;
 
-    -- confere se o lancamento existe mesmo
-    SELECT COUNT(*) INTO v_existe FROM registroHora WHERE id_registro = p_id_registro;
+    -- confere se o lancamento existe mesmo  (VIEW 3)
+    SELECT COUNT(*) INTO v_existe
+    FROM vw_registro_hora_detalhe
+    WHERE id_registro = p_id_registro;
 
     IF v_existe = 0 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'ERRO: registro de hora nao encontrado.';
@@ -560,10 +513,15 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'ERRO: hora corrigida invalida (deve ser maior que 0 e menor que 24:00:00).';
     END IF;
 
-    SELECT hora_trabalhada, cpf_colaborador, data_registro
-    INTO v_hora_atual, v_cpf, v_data
-    FROM registroHora
+    -- dados do registro e situacao do mes  (VIEW 3)
+    SELECT hora_trabalhada, cpf_colaborador, data_registro, situacao_mes
+    INTO v_hora_atual, v_cpf, v_data, v_situacao
+    FROM vw_registro_hora_detalhe
     WHERE id_registro = p_id_registro;
+
+    IF v_situacao = 'FECHADO' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'ERRO: mes fechado, reabra o periodo antes de corrigir esta hora.';
+    END IF;
 
     START TRANSACTION;
 
