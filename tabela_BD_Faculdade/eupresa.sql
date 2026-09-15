@@ -457,9 +457,3 @@ BEGIN
 END $$
 DELIMITER ;
 
-
--- ============================================
--- VIEWS REMOVIDAS NESTA VERSÃO
--- (vw_colaboradores_ativos, vw_horas_por_cliente,
---  vw_tarefas_detalhadas foram retiradas a pedido)
--- ============================================
